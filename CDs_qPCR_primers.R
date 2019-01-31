@@ -1,7 +1,7 @@
 # install required packages
-install.packages(c("pacman", "devtools", "BiocManager")
+install.packages(c("pacman", "devtools", "BiocManager"))
 # load utilities
-devtools::source_gist(id = )devtools::source_gist("7f63547158ecdbacf31b54a58af0d1cc", filename = "Util.R")
+devtools::source_gist("7f63547158ecdbacf31b54a58af0d1cc", filename = "Util.R")
 # install BioConductor packages (requires R>=3.5)
 if(getRversion() >= "3.5.0") {
   BiocManager::install(c("GenomicFeatures", "GenomicRanges","plyranges", "Rsamtools"))
@@ -40,7 +40,7 @@ txdb <- makeTxDbFromGFF(gff_file, format="gff3", dataSource = "v1.2 UoS",
                         taxonomyId = 3864)
 
 # gene_ids <- sub("\\.\\d+$", "", qtl_region_tx$tx_name)
-gene_ids <- gene_list$Genes
+# gene_ids <- gene_list$Genes
 # gene_pattern <- paste(glue::glue('ID={gene_ids};'), collapse = "|")
 # qtl_genes <- gff3 %>% mutate(attributes=gsub('\"', '', attributes, fixed = TRUE)) %>% 
 #   separate(attributes, c("ID", "Name", "Description"), sep = ";.+?=") %>%
@@ -51,16 +51,16 @@ gene_ids <- gene_list$Genes
 gene_txs <- transcripts(txdb,filter=list(tx_name=gene_list$Genes),  use.names=TRUE)
 gene_cds <- cds(txdb,columns=c("tx_name", "cds_name"),
                 filter=list(tx_name=gene_list$Genes),  use.names=TRUE)
-txdb[gene_list$Genes]
+# txdb[gene_list$Genes]
 gene_exons <- exons(txdb,columns=c("exon_name", "exon_id", "tx_name"), filter=list(tx_name=gene_list$Genes),  use.names=TRUE) %>% 
   mutate(exon_num=as.numeric(sub(".+exon(\\d+)", "\\1", exon_name)),
          tx_name=as.character(tx_name))
 
-gene_txs$tx_name
+# gene_txs$tx_name
 # cds_seqs <- extractTranscriptSeqs(fa,
 #                         cdsByOverlaps(txdb, gene_txs))
-# tx_seqs <- getSeq(fa, gene_txs) #   cds_seqs[snp_tx$tx_name]
-# names(tx_seqs) <- gene_txs$tx_name
+tx_seqs <- getSeq(fa, gene_txs) #   cds_seqs[snp_tx$tx_name]
+names(tx_seqs) <- gene_txs$tx_name
 exon_seqs <- getSeq(fa, gene_exons)
 names(exon_seqs) <- gene_exons$exon_name
 
@@ -102,6 +102,14 @@ exon_junctions <- as_tibble(gene_exons) %>% # filter(strand=="+") %>%
 # verify that both objects are in the same order
 names(cds_seqs)==exon_junctions$tx_name
 
+# A function to find product size on the full transcript
+find_DNA_product_size <- function(left_primer, right_primer, transcript){
+  fw_primer_start <- str_locate(transcript, left_primer)[1,1] 
+  rv_primer_end <- str_locate(transcript, 
+                              toString(reverseComplement(DNAString(right_primer))))[1,2] 
+  product_size <- rv_primer_end - fw_primer_start
+  return(product_size)
+}
 
 # Look at the following paper for instructions for primer design: http://onlinelibrary.wiley.com/doi/10.1002/bmb.20461/full
 primers <- mapply(.callP3NreadOrg, seq=cds_seqs, name = names(cds_seqs), 
@@ -114,7 +122,7 @@ primers <- mapply(.callP3NreadOrg, seq=cds_seqs, name = names(cds_seqs),
                                 settings="primer3_Sajitha_qPCR_settings.txt")
                   ,SIMPLIFY = FALSE,USE.NAMES = TRUE)
 # USE.NAMES = FALSE
-primers_table <- bind_rows(primers[!is.na(primers)]) %>% mutate(Primer_name=paste(sub("\\.\\d+$", "", Seq_ID), i,  sep = "_"), exon_junction="one of the primers on exon-exon boundary")
+primers_table <- bind_rows(primers[!is.na(primers)]) %>% mutate(Primer_name=paste(sub("\\.\\d+$", "", Seq_ID), i,  sep = "_"), exon_junction="One of the primers located on exon-exon boundary")
 
 # missing_cds <- exon_junctions %>% dplyr::filter(!tx_name %in% unique(primers_table$Seq_ID), junc_list!="") %>% mutate(seq=as.character(cds_seqs[tx_name]), first_junc=as.numeric(sub(" .+", "", junc_list)))
 # Add [] at exon junctions to design primers around them
@@ -134,8 +142,14 @@ missing_primers <- mapply(.callP3NreadOrg, seq=cds_seqs[missing_cds$tx_name],
                           ,SIMPLIFY = FALSE,USE.NAMES = TRUE)
 
 # combine all primers in one table
-primers_table <- bind_rows(missing_primers[!is.na(missing_primers)]) %>% mutate(Primer_name=paste(sub("\\.\\d+$", "", Seq_ID), i,  sep = "_"), exon_junction="PCR product spanning exon-exon boundary") %>% bind_rows(primers_table)
-primers_table$exon_junction[primers_table$Seq_ID=="Lc13441.1"] <- "No exon-exon boundaries"
+primers_table <- bind_rows(missing_primers[!is.na(missing_primers)]) %>% 
+  mutate(Primer_name=paste(sub("\\.\\d+$", "", Seq_ID), i,  sep = "_"), 
+         DNA_PRODUCT_SIZE=pmap_dbl(.[1:4], ~find_DNA_product_size(..3,..4 , tx_seqs[..1]) ) ,
+          exon_junction="PCR product spanning exon-exon boundary") %>% bind_rows(primers_table)
+
+no_intron_cds <- missing_cds %>% filter(junc_list=="") %>% .$tx_name
+primers_table$exon_junction[primers_table$Seq_ID %in% no_intron_cds] <- "No exon-exon boundaries"
+
 
 #### Save results ####
 # Save primer table to file
